@@ -4,6 +4,7 @@
 NetOmniscient is a sophisticated monitoring system designed to bridge the gap between traditional batch-processed logs and real-time incident response. Built specifically for Windows environments, it monitors native firewall logs and live network traffic to detect anomalies as they happen.A Python-based real-time network security tool for Windows. Uses Scapy for packet sniffing and WebSockets for instant threat alerting.# NetOmniscient 🛡️
 
 ## 🚀 Key Features
+
 - **Live Packet Sniffing:** Captures network metadata using the Scapy library to identify suspicious traffic patterns.
 - **Firewall Log Integration:** Real-time monitoring of `pfirewall.log` using the Watchdog API.
 - **Instant Alerting:** Web-based GUI powered by Flask-SocketIO (WebSockets) for sub-second threat notifications.
@@ -32,6 +33,7 @@ The system operates on a modular architecture:
 <img width="1919" height="903" alt="2" src="https://github.com/user-attachments/assets/fc528b52-1664-40cb-83f6-506d631c2551" />
 <img width="1919" height="898" alt="1" src="https://github.com/user-attachments/assets/b7b5a1fd-45af-4f41-b105-4d6f4a005e12" />
 
+[NetOminicient - Intrusion Detection System.zip](https://github.com/user-attachments/files/25739161/NetOminicient.-.Intrusion.Detection.System.zip)
 
 ## 🛠️ Installation
 1. Clone the repository:
