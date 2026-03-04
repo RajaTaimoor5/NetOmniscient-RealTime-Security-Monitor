@@ -1,0 +1,255 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NetOmniscient - Network Monitoring Dashboard</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css">
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f4f6f9;
+        }
+        .sidebar {
+            background-color: #1a202c;
+            color: white;
+            height: 100vh;
+            position: fixed;
+            width: 250px;
+        }
+        .sidebar a {
+            color: white;
+            display: block;
+            padding: 15px;
+            text-decoration: none;
+        }
+        .sidebar a:hover {
+            background-color: #2d3748;
+        }
+        .content {
+            margin-left: 250px;
+            padding: 20px;
+        }
+        .table-container {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #2d3748;
+            color: white;
+        }
+        .alert {
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+        }
+        .alert-info {
+            background-color: #bee3f8;
+            color: #2b6cb0;
+        }
+        .alert-error {
+            background-color: #fed7d7;
+            color: #c53030;
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h2 class="text-xl font-bold p-4">NetOmniscient</h2>
+        <a href="#" onclick="showSection('dashboard')"><i class="fas fa-tachometer-alt"></i> Dashboard</a>
+        <a href="#" onclick="showSection('logs')"><i class="fas fa-file-alt"></i> Firewall Logs</a>
+        <a href="#" onclick="showSection('packets')"><i class="fas fa-network-wired"></i> Sniffed Packets</a>
+        <a href="#" onclick="showSection('alerts')"><i class="fas fa-exclamation-triangle"></i> Alerts</a>
+        <a href="#" onclick="showSection('config')"><i class="fas fa-cog"></i> Configuration</a>
+    </div>
+    <div class="content">
+        <div id="dashboard" class="section">
+            <h1 class="text-2xl font-bold mb-4">Dashboard</h1>
+            <p>Welcome to NetOmniscient. Monitor network activity in real-time.</p>
+        </div>
+        <div id="logs" class="section hidden">
+            <h1 class="text-2xl font-bold mb-4">Firewall Logs</h1>
+            <div class="table-container">
+                <table id="log-table">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Source IP</th>
+                            <th>Destination IP</th>
+                            <th>Source Port</th>
+                            <th>Destination Port</th>
+                            <th>Protocol</th>
+                            <th>Action</th>
+                            <th>Size</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+        <div id="packets" class="section hidden">
+            <h1 class="text-2xl font-bold mb-4">Sniffed Packets</h1>
+            <div class="table-container">
+                <table id="sniffed-packets">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Source IP</th>
+                            <th>Destination IP</th>
+                            <th>Source Port</th>
+                            <th>Destination Port</th>
+                            <th>Protocol</th>
+                            <th>Size</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+        <div id="alerts" class="section hidden">
+            <h1 class="text-2xl font-bold mb-4">Alerts</h1>
+            <div id="alert-list"></div>
+        </div>
+        <div id="config" class="section hidden">
+            <h1 class="text-2xl font-bold mb-4">Configuration</h1>
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700">Log File Path</label>
+                <input type="text" id="log-path" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm" value="">
+            </div>
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700">Network Interface</label>
+            <select id="network-interface" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm">
+                <option value="">Select Interface</option>
+            </select>
+            </div>
+            <button onclick="updateConfig()" class="bg-blue-500 text-white px-4 py-2 rounded">Update Configuration</button>
+            <button onclick="reprocessLogs()" class="bg-green-500 text-white px-4 py-2 rounded ml-2">Reprocess Logs</button>
+        </div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.js"></script>
+    <script>
+        var socket = io();
+        function showSection(sectionId) {
+            $('.section').addClass('hidden');
+            $('#' + sectionId).removeClass('hidden');
+        }
+        socket.on('connect', function() {
+            console.log('Connected to server');
+        });
+        socket.on('new_log_batch', function(logs) {
+            logs.forEach(function(log) {
+                $('#log-table tbody').prepend(
+                    '<tr><td>' + log.timestamp + '</td>' +
+                    '<td>' + log['src-ip'] + '</td>' +
+                    '<td>' + log['dst-ip'] + '</td>' +
+                    '<td>' + log['src-port'] + '</td>' +
+                    '<td>' + log['dst-port'] + '</td>' +
+                    '<td>' + log.protocol + '</td>' +
+                    '<td>' + log.action + '</td>' +
+                    '<td>' + log.size + '</td></tr>'
+                );
+            });
+        });
+        socket.on('new_packet_batch', function(packets) {
+            packets.forEach(function(packet) {
+                $('#sniffed-packets tbody').prepend(
+                    '<tr><td>' + packet.timestamp + '</td>' +
+                    '<td>' + packet['src-ip'] + '</td>' +
+                    '<td>' + packet['dst-ip'] + '</td>' +
+                    '<td>' + packet['src-port'] + '</td>' +
+                    '<td>' + packet['dst-port'] + '</td>' +
+                    '<td>' + packet.protocol + '</td>' +
+                    '<td>' + packet.size + '</td></tr>'
+                );
+            });
+        });
+        socket.on('alert_batch', function(alerts) {
+            alerts.forEach(function(alert) {
+                var alertClass = alert.type.includes('Error') ? 'alert-error' : 'alert-info';
+                $('#alert-list').prepend(
+                    '<div class="alert ' + alertClass + '">' +
+                    '<strong>' + alert.type + '</strong>: ' + alert.message +
+                    ' (Timestamp: ' + alert.timestamp + ')' +
+                    '</div>'
+                );
+            });
+        });
+        socket.on('config', function(config) {
+            $('#log-path').val(config.log_path);
+            $('#network-interface').empty();
+            $('#network-interface').append('<option value="">Select Interface</option>');
+            config.available_interfaces.forEach(function(iface) {
+                $('#network-interface').append('<option value="' + iface + '">' + iface + '</option>');
+            });
+            $('#network-interface').val(config.network_interface);
+        });
+        socket.on('config_response', function(response) {
+            var alertClass = response.status === 'success' ? 'alert-info' : 'alert-error';
+            $('#alert-list').prepend(
+                '<div class="alert ' + alertClass + '">' + response.message + '</div>'
+            );
+        });
+        function updateConfig() {
+            var logPath = $('#log-path').val();
+            var networkInterface = $('#network-interface').val();
+            socket.emit('update_config', {
+                log_path: logPath,
+                network_interface: networkInterface
+            });
+        }
+        function reprocessLogs() {
+            socket.emit('reprocess_logs', {});
+        }
+    </script>
+</body>
+</html>

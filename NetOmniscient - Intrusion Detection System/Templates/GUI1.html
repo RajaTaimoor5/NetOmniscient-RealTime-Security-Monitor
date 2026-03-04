@@ -1,0 +1,365 @@
+<script type="text/javascript">
+    var gk_isXlsx = false;
+    var gk_xlsxFileLookup = {};
+    var gk_fileData = {};
+    function filledCell(cell) {
+        return cell !== '' && cell != null;
+    }
+    function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                    row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                    headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+    }
+</script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NetOmniscient - Network Monitoring</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+        }
+        .table-container {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .alert {
+            animation: fadeIn 0.5s;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        .filter-input {
+            transition: all 0.3s ease;
+        }
+        .filter-input:focus {
+            border-color: #3B82F6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+        .tab {
+            transition: all 0.2s ease;
+        }
+        .tab.active {
+            background-color: #3B82F6;
+            color: white;
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto p-4">
+        <h1 class="text-3xl font-bold mb-4">NetOmniscient - Network Monitoring</h1>
+
+        <!-- Configuration Panel -->
+        <div class="bg-white p-4 rounded shadow mb-4">
+            <h2 class="text-xl font-semibold mb-2">Configuration</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm font-medium">Log File Path</label>
+                    <input id="log_path" type="text" class="w-full p-2 border rounded filter-input" placeholder="Enter log file path">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium">Network Interface</label>
+                    <select id="network_interface" class="w-full p-2 border rounded filter-input">
+                        <option value="">Disable Sniffing</option>
+                    </select>
+                </div>
+            </div>
+            <div class="mt-4">
+                <button id="update_config" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Update Configuration</button>
+                <button id="reprocess_logs" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 ml-2">Reprocess Logs</button>
+            </div>
+            <p id="config_status" class="mt-2 text-sm"></p>
+        </div>
+
+        <!-- Status -->
+        <div class="bg-white p-4 rounded shadow mb-4">
+            <h2 class="text-xl font-semibold mb-2">System Status</h2>
+            <p id="status" class="text-sm">Connecting...</p>
+        </div>
+
+        <!-- Tabs for Alerts, Logs, Packets -->
+        <div class="mb-4">
+            <div class="flex border-b">
+                <button class="tab px-4 py-2 font-semibold text-gray-600 border-b-2 border-transparent hover:border-blue-500 active" data-tab="alerts">Alerts</button>
+                <button class="tab px-4 py-2 font-semibold text-gray-600 border-b-2 border-transparent hover:border-blue-500" data-tab="logs">Firewall Logs</button>
+                <button class="tab px-4 py-2 font-semibold text-gray-600 border-b-2 border-transparent hover:border-blue-500" data-tab="packets">Sniffed Packets</button>
+            </div>
+        </div>
+
+        <!-- Alerts -->
+        <div id="alerts_tab" class="bg-white p-4 rounded shadow mb-4 tab-content">
+            <h2 class="text-xl font-semibold mb-2">Alerts</h2>
+            <input id="alerts_filter" type="text" class="w-full p-2 mb-2 border rounded filter-input" placeholder="Filter alerts by type or message...">
+            <div class="table-container">
+                <table class="w-full border-collapse">
+                    <thead>
+                        <tr class="bg-gray-200">
+                            <th class="p-2 text-left">Timestamp</th>
+                            <th class="p-2 text-left">Type</th>
+                            <th class="p-2 text-left">Message</th>
+                        </tr>
+                    </thead>
+                    <tbody id="alerts_body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Logs -->
+        <div id="logs_tab" class="bg-white p-4 rounded shadow mb-4 tab-content hidden">
+            <h2 class="text-xl font-semibold mb-2">Firewall Logs</h2>
+            <input id="logs_filter" type="text" class="w-full p-2 mb-2 border rounded filter-input" placeholder="Filter logs by IP, port, or protocol...">
+            <div class="table-container">
+                <table class="w-full border-collapse">
+                    <thead>
+                        <tr class="bg-gray-200">
+                            <th class="p-2 text-left">Timestamp</th>
+                            <th class="p-2 text-left">Source IP</th>
+                            <th class="p-2 text-left">Dest IP</th>
+                            <th class="p-2 text-left">Source Port</th>
+                            <th class="p-2 text-left">Dest Port</th>
+                            <th class="p-2 text-left">Protocol</th>
+                            <th class="p-2 text-left">Action</th>
+                            <th class="p-2 text-left">Size</th>
+                        </tr>
+                    </thead>
+                    <tbody id="logs_body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Packets -->
+        <div id="packets_tab" class="bg-white p-4 rounded shadow tab-content hidden">
+            <h2 class="text-xl font-semibold mb-2">Sniffed Packets</h2>
+            <input id="packets_filter" type="text" class="w-full p-2 mb-2 border rounded filter-input" placeholder="Filter packets by IP, port, or protocol...">
+            <div class="table-container">
+                <table class="w-full border-collapse">
+                    <thead>
+                        <tr class="bg-gray-200">
+                            <th class="p-2 text-left">Timestamp</th>
+                            <th class="p-2 text-left">Source IP</th>
+                            <th class="p-2 text-left">Dest IP</th>
+                            <th class="p-2 text-left">Source Port</th>
+                            <th class="p-2 text-left">Dest Port</th>
+                            <th class="p-2 text-left">Protocol</th>
+                            <th class="p-2 text-left">Size</th>
+                        </tr>
+                    </thead>
+                    <tbody id="packets_body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let logs = [];
+        let packets = [];
+        let alerts = [];
+
+        // Escape HTML to prevent XSS
+        function escapeHTML(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        // Debounce function to limit update frequency
+        function debounce(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
+        }
+
+        // Filter data based on input
+        function filterData(data, filterText, fields) {
+            if (!filterText) return data;
+            filterText = filterText.toLowerCase();
+            return data.filter(item => 
+                fields.some(field => 
+                    String(item[field] || '').toLowerCase().includes(filterText)
+                )
+            );
+        }
+
+        // Update table with virtualized rendering
+        function updateTable(bodyId, data, maxRows, rowTemplate, filterId, filterFields) {
+            const tbody = document.getElementById(bodyId);
+            const filterText = document.getElementById(filterId)?.value || '';
+            const filteredData = filterData(data, filterText, filterFields);
+            while (filteredData.length > maxRows) {
+                data.shift();
+            }
+            tbody.innerHTML = filteredData.map(rowTemplate).join('');
+        }
+
+        // Log row template
+        function logRow(log) {
+            return `<tr>
+                <td class="p-2 border">${escapeHTML(log.timestamp)}</td>
+                <td class="p-2 border">${escapeHTML(log['src-ip'])}</td>
+                <td class="p-2 border">${escapeHTML(log['dst-ip'])}</td>
+                <td class="p-2 border">${escapeHTML(log['src-port'])}</td>
+                <td class="p-2 border">${escapeHTML(log['dst-port'])}</td>
+                <td class="p-2 border">${escapeHTML(log.protocol)}</td>
+                <td class="p-2 border">${escapeHTML(log.action)}</td>
+                <td class="p-2 border">${escapeHTML(log.size)}</td>
+            </tr>`;
+        }
+
+        // Packet row template
+        function packetRow(packet) {
+            return `<tr>
+                <td class="p-2 border">${escapeHTML(packet.timestamp)}</td>
+                <td class="p-2 border">${escapeHTML(packet['src-ip'])}</td>
+                <td class="p-2 border">${escapeHTML(packet['dst-ip'])}</td>
+                <td class="p-2 border">${escapeHTML(packet['src-port'])}</td>
+                <td class="p-2 border">${escapeHTML(packet['dst-port'])}</td>
+                <td class="p-2 border">${escapeHTML(packet.protocol)}</td>
+                <td class="p-2 border">${escapeHTML(packet.size)}</td>
+            </tr>`;
+        }
+
+        // Alert row template
+        function alertRow(alert) {
+            return `<tr class="alert ${escapeHTML(alert.type).includes('Error') ? 'bg-red-100' : 'bg-yellow-100'}">
+                <td class="p-2 border">${escapeHTML(alert.timestamp)}</td>
+                <td class="p-2 border">${escapeHTML(alert.type)}</td>
+                <td class="p-2 border">${escapeHTML(alert.message)}</td>
+            </tr>`;
+        }
+
+        // Debounced table updates
+        const updateLogs = debounce(() => updateTable('logs_body', logs, 100, logRow, 'logs_filter', ['src-ip', 'dst-ip', 'src-port', 'dst-port', 'protocol', 'action', 'size']), 100);
+        const updatePackets = debounce(() => updateTable('packets_body', packets, 100, packetRow, 'packets_filter', ['src-ip', 'dst-ip', 'src-port', 'dst-port', 'protocol', 'size']), 100);
+        const updateAlerts = debounce(() => updateTable('alerts_body', alerts, 100, alertRow, 'alerts_filter', ['type', 'message']), 100);
+
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                document.querySelectorAll('.tab-content').forEach(content => content.classList.add('hidden'));
+                document.getElementById(`${tab.dataset.tab}_tab`).classList.remove('hidden');
+            });
+        });
+
+        // Filter input listeners
+        document.getElementById('logs_filter')?.addEventListener('input', updateLogs);
+        document.getElementById('packets_filter')?.addEventListener('input', updatePackets);
+        document.getElementById('alerts_filter')?.addEventListener('input', updateAlerts);
+
+        // SocketIO event handlers
+        socket.on('connect', () => {
+            document.getElementById('status').textContent = 'Connected to server';
+            document.getElementById('status').classList.add('text-green-600');
+        });
+
+        socket.on('new_log', (log) => {
+            logs.push(log);
+            updateLogs();
+        });
+
+        socket.on('new_log_batch', (batch) => {
+            logs.push(...batch);
+            updateLogs();
+        });
+
+        socket.on('new_packet_batch', (batch) => {
+            packets.push(...batch);
+            updatePackets();
+        });
+
+        socket.on('alert', (alert) => {
+            alert.timestamp = new Date().toLocaleString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            alerts.push(alert);
+            updateAlerts();
+        });
+
+        socket.on('alert_batch', (batch) => {
+            batch.forEach(alert => {
+                alert.timestamp = new Date().toLocaleString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            });
+            alerts.push(...batch);
+            updateAlerts();
+        });
+
+        socket.on('heartbeat', (data) => {
+            document.getElementById('status').textContent = `Connected (Last heartbeat: ${data.timestamp})`;
+        });
+
+        socket.on('config', (config) => {
+            document.getElementById('log_path').value = config.log_path;
+            const select = document.getElementById('network_interface');
+            select.innerHTML = '<option value="">Disable Sniffing</option>' +
+                config.available_interfaces.map(iface => `<option value="${iface}">${iface}</option>`).join('');
+            select.value = config.network_interface || '';
+        });
+
+        socket.on('config_response', (response) => {
+            const status = document.getElementById('config_status');
+            status.textContent = response.message;
+            status.className = `mt-2 text-sm ${response.status === 'success' ? 'text-green-600' : 'text-red-600'}`;
+            setTimeout(() => status.textContent = '', 5000);
+        });
+
+        socket.on('test_response', (data) => {
+            console.log('Test response:', data);
+        });
+
+        // Configuration updates
+        document.getElementById('update_config').addEventListener('click', () => {
+            const log_path = document.getElementById('log_path').value;
+            const network_interface = document.getElementById('network_interface').value;
+            socket.emit('update_config', { log_path, network_interface });
+        });
+
+        document.getElementById('reprocess_logs').addEventListener('click', () => {
+            socket.emit('reprocess_logs', {});
+        });
+
+        // Test event for debugging
+        document.addEventListener('DOMContentLoaded', () => {
+            socket.emit('test_event', { message: 'Client connected' });
+        });
+    </script>
+    <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9353e4ae4f3abadd',t:'MTc0NTQ3OTgwNS4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script>
+</body>
+</html>
